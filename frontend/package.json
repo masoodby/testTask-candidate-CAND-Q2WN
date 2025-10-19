@@ -10,13 +10,16 @@
     "test": "vitest"
   },
   "dependencies": {
-    "vue": "^3.4.0",
+    "axios": "^1.7.7",
     "pinia": "^2.1.7",
-    "axios": "^1.7.7"
+    "vue": "^3.4.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^5.0.0",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "@vue/compiler-sfc": "^3.5.22",
+    "@vue/test-utils": "^2.4.0-alpha.2",
+    "happy-dom": "^20.0.5",
     "vite": "^5.0.0",
-    "vitest": "^2.0.0"
+    "vitest": "^2.1.9"
   }
 }

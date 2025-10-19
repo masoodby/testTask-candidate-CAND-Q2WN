@@ -1,0 +1,13 @@
+{
+    "name": "candidate/backend",
+    "description": "Backend for interview task",
+    "require-dev": {
+        "phpunit/phpunit": "^10"
+    },
+    "authors": [
+        {
+            "name": "Masood",
+            "email": "masood@example.com"
+        }
+    ]
+}
