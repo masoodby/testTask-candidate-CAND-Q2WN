@@ -1,75 +1,113 @@
 <?php
 declare(strict_types=1);
 
+/** @var PDO $pdo */
 $pdo = $GLOBALS['pdo'];
 
-// --- Deliberate issues below (for the candidate to find & fix) ---
-// 1) No proper WHERE index on created_at (SQLite allows indexes but we didn't add).
-$userId = isset($_GET['user_id']) ? (int)$_GET['user_id'] : 1;
-$page   = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
-$per    = isset($_GET['per_page']) ? max(1, min(100, (int)$_GET['per_page'])) : 20;
+header('Content-Type: application/json; charset=utf-8');
 
-$start  = $_GET['start'] ?? null;
-$end    = $_GET['end'] ?? null;
-
-// Very naive cache key (candidates should redesign invalidation)
-$cacheKey = "orders:u{$userId}:p{$page}:per{$per}:s{$start}:e{$end}";
-if ($cached = cache_get($cacheKey)) {
-    echo $cached;
-    return;
+//helpers 
+function as_int($v, int $default, int $min, int $max): int {
+    if (!isset($v) || $v === '' || !is_numeric($v)) return $default;
+    $v = (int)$v;
+    if ($v < $min) $v = $min;
+    if ($v > $max) $v = $max;
+    return $v;
+}
+function bad_request(string $msg, int $code = 400): never {
+    http_response_code($code);
+    echo json_encode(['error' => $msg], JSON_UNESCAPED_UNICODE);
+    exit;
 }
 
-// Build base SQL (inefficient on purpose)
-$sql = "SELECT id, user_id, total, created_at FROM orders WHERE user_id = :uid";
+
+$userId = isset($_GET['user_id']) ? (int)$_GET['user_id'] : 0;
+if ($userId <= 0) bad_request('user_id is required (> 0)');
+
+$page   = as_int($_GET['page']     ?? null, 1, 1, 1000000);
+$per    = as_int($_GET['per_page'] ?? null, 20, 1, 100);
+$offset = ($page - 1) * $per;
+
+
+$start  = $_GET['start'] ?? null; 
+$end    = $_GET['end']   ?? null; 
+
+//where builder 
+$where  = ['o.user_id = :uid'];
 $params = [':uid' => $userId];
 
-if ($start) {
-    $sql .= " AND created_at >= :start"; // no index -> slow
-    $params[':start'] = $start;
+if ($start !== null && $start !== '') {
+    $where[] = 'o.created_at >= :start';
+    $params[':start'] = (string)$start;
 }
-if ($end) {
-    $sql .= " AND created_at <= :end";   // no index -> slow
-    $params[':end'] = $end;
+if ($end !== null && $end !== '') {
+    $where[] = 'o.created_at <= :end';
+    $params[':end'] = (string)$end;
 }
+$whereSql = 'WHERE ' . implode(' AND ', $where);
 
-// BAD: sorting on computed expression (just to be nasty)
-// We'll simply sort by created_at ASC, but candidate can consider different sort orders.
-$sql .= " ORDER BY datetime(created_at) ASC";
-
-// BAD pagination: OFFSET pagination without a stable index
-$offset = ($page - 1) * $per;
-$sql .= " LIMIT {$per} OFFSET {$offset}";
-
-$stmt = $pdo->prepare($sql);
-$stmt->execute($params);
-$rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// N+1 style enrichment (simulate joins badly)
-foreach ($rows as &$r) {
-    // BAD: separate queries per row (simulate N+1)
-    $s2 = $pdo->prepare("SELECT method, status FROM payments WHERE order_id = :oid");
-    $s2->execute([':oid' => $r['id']]);
-    $pay = $s2->fetch(PDO::FETCH_ASSOC);
-    $r['payment'] = $pay ?: ['method' => null, 'status' => null];
-
-    // Another N+1 for item count
-    $s3 = $pdo->prepare("SELECT COUNT(*) as c FROM order_items WHERE order_id = :oid");
-    $s3->execute([':oid' => $r['id']]);
-    $cnt = $s3->fetch(PDO::FETCH_ASSOC);
-    $r['items_count'] = $cnt ? (int)$cnt['c'] : 0;
+// ---- total count for pagination ----
+$sqlCount = "SELECT COUNT(*) AS total FROM orders o $whereSql";
+$stCount = $pdo->prepare($sqlCount);
+foreach ($params as $k => $v) {
+    $stCount->bindValue($k, $k === ':uid' ? (int)$v : (string)$v, $k === ':uid' ? PDO::PARAM_INT : PDO::PARAM_STR);
 }
-unset($r);
+$stCount->execute();
+$total = (int)$stCount->fetchColumn();
 
-// Fake delay to exaggerate slowness
-usleep(50000); // 50ms
 
+$sql = "
+SELECT
+  o.id,
+  o.user_id,
+  o.total,
+  o.created_at,
+  p.method    AS payment_method,
+  p.status    AS payment_status,
+  COALESCE(oi.c, 0) AS items_count
+FROM orders o
+LEFT JOIN payments p ON p.order_id = o.id
+LEFT JOIN (
+  SELECT order_id, COUNT(*) AS c
+  FROM order_items
+  GROUP BY order_id
+) oi ON oi.order_id = o.id
+$whereSql
+-- ترتیب سازگار با ایندکس (بدون تابع):
+ORDER BY o.created_at DESC, o.id DESC
+LIMIT :limit OFFSET :offset
+";
+
+$st = $pdo->prepare($sql);
+foreach ($params as $k => $v) {
+    $st->bindValue($k, $k === ':uid' ? (int)$v : (string)$v, $k === ':uid' ? PDO::PARAM_INT : PDO::PARAM_STR);
+}
+$st->bindValue(':limit',  $per,    PDO::PARAM_INT);
+$st->bindValue(':offset', $offset, PDO::PARAM_INT);
+$st->execute();
+$rows = $st->fetchAll(PDO::FETCH_ASSOC);
+
+// pagination
 $out = json_encode([
     'token_hint' => '{{CAND-Q2WN}}',
-    'page' => $page,
-    'per_page' => $per,
-    'count' => count($rows),
-    'data' => $rows
+    'page'       => $page,
+    'per_page'   => $per,
+    'total'      => $total,
+    'count'      => count($rows),
+    'has_next'   => ($offset + $per) < $total,
+    'has_prev'   => $page > 1,
+    'data'       => array_map(function(array $r) {
+       
+        $r['payment'] = [
+            'method' => $r['payment_method'] ?? null,
+            'status' => $r['payment_status'] ?? null,
+        ];
+        unset($r['payment_method'], $r['payment_status']);
+        return $r;
+    }, $rows),
 ], JSON_UNESCAPED_UNICODE);
 
+// set the cache
+$cacheKey = "orders:u{$userId}:p{$page}:per{$per}:s{$start}:e{$end}";
 cache_set($cacheKey, $out);
 echo $out;
