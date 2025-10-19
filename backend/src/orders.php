@@ -40,8 +40,8 @@ if ($start !== null && $start !== '') {
     $where[] = 'o.created_at >= :start';
     $params[':start'] = (string)$start;
 }
-if ($end !== null && $end !== '') {
-    $where[] = 'o.created_at <= :end';
+if ($end !== null && $end !== '') {    
+    $where[] = 'o.created_at < :end'; 
     $params[':end'] = (string)$end;
 }
 $whereSql = 'WHERE ' . implode(' AND ', $where);
@@ -93,11 +93,13 @@ $out = json_encode([
     'page'       => $page,
     'per_page'   => $per,
     'total'      => $total,
+    'total_pages'=> $totalPages,
     'count'      => count($rows),
-    'has_next'   => ($offset + $per) < $total,
-    'has_prev'   => $page > 1,
+    'has_next'   => $hasNext,
+    'has_prev'   => $hasPrev,
+    'next_page'  => $nextPage,
+    'prev_page'  => $prevPage,
     'data'       => array_map(function(array $r) {
-       
         $r['payment'] = [
             'method' => $r['payment_method'] ?? null,
             'status' => $r['payment_status'] ?? null,
