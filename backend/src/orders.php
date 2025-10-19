@@ -66,6 +66,18 @@ if ($start !== null && $end !== null && strcmp($start, $end) >= 0) {
 
 $whereSql = 'WHERE ' . implode(' AND ', $where);
 
+
+//  read cache first 
+$cacheKey = "orders:u{$userId}:p{$page}:per{$per}:s{$start}:e{$end}";
+if (function_exists('cache_get')) {
+    $cached = cache_get($cacheKey);
+    if ($cached !== null) {
+      
+        header('Cache-Control: public, max-age=30');
+        echo $cached;
+        return;
+    }
+}
 //  total count 
 $sqlCount = "SELECT COUNT(*) AS total FROM orders o $whereSql";
 $stCount = $pdo->prepare($sqlCount);
@@ -136,7 +148,7 @@ $out = json_encode([
     }, $rows),
 ], JSON_UNESCAPED_UNICODE);
 
-// ---------- cache set (اختیاری؛ اگر cache_set دارید) ----------
+
 $cacheKey = "orders:u{$userId}:p{$page}:per{$per}:s{$start}:e{$end}";
 if (function_exists('cache_set')) {
     cache_set($cacheKey, $out);
