@@ -6,7 +6,7 @@ $pdo = $GLOBALS['pdo'];
 
 header('Content-Type: application/json; charset=utf-8');
 
-//helpers 
+// ---------- helpers ----------
 function as_int($v, int $default, int $min, int $max): int {
     if (!isset($v) || $v === '' || !is_numeric($v)) return $default;
     $v = (int)$v;
@@ -20,7 +20,20 @@ function bad_request(string $msg, int $code = 400): never {
     exit;
 }
 
+function normalize_date(?string $v, bool $isEnd = false): ?string {
+    if ($v === null || $v === '') return null;
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) {
+        if ($isEnd) {
+            $dt = new DateTime($v . ' 00:00:00');
+            $dt->modify('+1 day');
+            return $dt->format('Y-m-d H:i:s');
+        }
+        return $v . ' 00:00:00';
+    }
+    return $v;
+}
 
+//  inputs
 $userId = isset($_GET['user_id']) ? (int)$_GET['user_id'] : 0;
 if ($userId <= 0) bad_request('user_id is required (> 0)');
 
@@ -29,24 +42,31 @@ $per    = as_int($_GET['per_page'] ?? null, 20, 1, 100);
 $offset = ($page - 1) * $per;
 
 
-$start  = $_GET['start'] ?? null; 
-$end    = $_GET['end']   ?? null; 
+$startRaw = $_GET['start'] ?? null;
+$endRaw   = $_GET['end']   ?? null;
+$start    = normalize_date($startRaw, false);
+$end      = normalize_date($endRaw,   true);
 
-//where builder 
+//  WHERE 
 $where  = ['o.user_id = :uid'];
 $params = [':uid' => $userId];
 
-if ($start !== null && $start !== '') {
+if ($start !== null) {
     $where[] = 'o.created_at >= :start';
-    $params[':start'] = (string)$start;
+    $params[':start'] = $start;
 }
-if ($end !== null && $end !== '') {    
+if ($end !== null) {
     $where[] = 'o.created_at < :end'; 
-    $params[':end'] = (string)$end;
+    $params[':end'] = $end;
 }
+
+if ($start !== null && $end !== null && strcmp($start, $end) >= 0) {
+    bad_request('invalid range: start must be less than end');
+}
+
 $whereSql = 'WHERE ' . implode(' AND ', $where);
 
-// ---- total count for pagination ----
+//  total count 
 $sqlCount = "SELECT COUNT(*) AS total FROM orders o $whereSql";
 $stCount = $pdo->prepare($sqlCount);
 foreach ($params as $k => $v) {
@@ -55,6 +75,7 @@ foreach ($params as $k => $v) {
 $stCount->execute();
 $total = (int)$stCount->fetchColumn();
 
+//  main query (N+1 Removed...) 
 
 $sql = "
 SELECT
@@ -73,7 +94,6 @@ LEFT JOIN (
   GROUP BY order_id
 ) oi ON oi.order_id = o.id
 $whereSql
--- ترتیب سازگار با ایندکس (بدون تابع):
 ORDER BY o.created_at DESC, o.id DESC
 LIMIT :limit OFFSET :offset
 ";
@@ -87,7 +107,14 @@ $st->bindValue(':offset', $offset, PDO::PARAM_INT);
 $st->execute();
 $rows = $st->fetchAll(PDO::FETCH_ASSOC);
 
-// pagination
+// ---------- pagination meta ----------
+$totalPages = (int)ceil($total / max(1, $per));
+$hasNext    = ($offset + $per) < $total;
+$hasPrev    = $page > 1;
+$nextPage   = $hasNext ? $page + 1 : null;
+$prevPage   = $hasPrev ? $page - 1 : null;
+
+// ---------- output ----------
 $out = json_encode([
     'token_hint' => '{{CAND-Q2WN}}',
     'page'       => $page,
@@ -109,7 +136,10 @@ $out = json_encode([
     }, $rows),
 ], JSON_UNESCAPED_UNICODE);
 
-// set the cache
+// ---------- cache set (اختیاری؛ اگر cache_set دارید) ----------
 $cacheKey = "orders:u{$userId}:p{$page}:per{$per}:s{$start}:e{$end}";
-cache_set($cacheKey, $out);
+if (function_exists('cache_set')) {
+    cache_set($cacheKey, $out);
+}
+
 echo $out;
