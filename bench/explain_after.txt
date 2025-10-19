@@ -1,0 +1,11 @@
+Array
+(
+    [0] => Array
+        (
+            [id] => 7
+            [parent] => 0
+            [notused] => 56
+            [detail] => SEARCH o USING COVERING INDEX idx_orders_user_created_id (user_id=?)
+        )
+
+)

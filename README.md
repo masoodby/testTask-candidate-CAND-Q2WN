@@ -74,6 +74,22 @@ Update `TARGET_URL` in `bench/bench.php` then:
 ```
 php bench/bench.php 50 > bench/bench.csv
 ```
+### Benchmark (Before vs After)
+
+- Endpoint: GET /api/orders?user_id=1&page=1&per_page=20
+- Runs: 50 requests per run
+
+| Run | Context             | Mean (ms) | Median (ms) | p95 (ms) | Max (ms) |
+|----:|---------------------|----------:|------------:|---------:|---------:|
+| A   | after + cached      |   2.05    |     0.68    |   2.12   |   55.19  |
+| B   | after (uncached?)   |  19.73    |    17.70    |  18.86   |  110.06  |
+
+- Speedup (median): ~26× (A vs B)
+- Speedup (mean): ~9.6× (A vs B)
+
+Notes:
+- First request in each run is cold (warming, I/O, JIT), hence the spike.
+- A uses server-side SQLite cache with 60s TTL; B measured with cold cache or invalidation.
 
 ## Token
 - Use `{TOKEN}` in: branch name, first commit message header, and at top of your benchmark CSV (script will add it if you set BENCH_TOKEN env).
